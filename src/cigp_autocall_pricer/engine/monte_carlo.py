@@ -4,23 +4,28 @@ class MonteCarloSimulator:
     """
     Monte-Carlo Simulator for correlated assets following Geometric Brownian Motion.
     """
-    def __init__(self, spots: np.ndarray, vols: np.ndarray, corr_matrix: np.ndarray, 
+    def __init__(self, spots: np.ndarray, vol_surfaces, corr_matrix: np.ndarray, 
                  yield_curve, div_yields: np.ndarray):
         """
         :param spots: 1D array of initial spot prices.
-        :param vols: 1D array of volatilities.
+        :param vol_surfaces: List of VolatilitySurface objects (one per asset).
         :param corr_matrix: 2D correlation matrix.
         :param yield_curve: An instance of YieldCurve (e.g. flat rate mapping)
         :param div_yields: 1D array of continuous dividend yields.
         """
         self.spots = np.array(spots, dtype=float)
-        self.vols = np.array(vols, dtype=float)
+        self.vol_surfaces = vol_surfaces # List of VolatilitySurface
         self.corr_matrix = np.array(corr_matrix, dtype=float)
         self.yield_curve = yield_curve
         self.div_yields = np.array(div_yields, dtype=float)
         
         self.num_assets = len(spots)
-        assert self.vols.shape == (self.num_assets,)
+        # Compatibility check: if vol_surfaces is a 1D array of floats, convert to flat surfaces
+        from .vol_surface import VolatilitySurface
+        if isinstance(self.vol_surfaces, (np.ndarray, list)) and not isinstance(self.vol_surfaces[0], VolatilitySurface):
+            self.vol_surfaces = [VolatilitySurface.from_flat_vol(v, s0=s) for v, s in zip(self.vol_surfaces, self.spots)]
+            
+        assert len(self.vol_surfaces) == self.num_assets
         assert self.corr_matrix.shape == (self.num_assets, self.num_assets)
         assert self.div_yields.shape == (self.num_assets,)
         
@@ -75,23 +80,44 @@ class MonteCarloSimulator:
             
             r = self.yield_curve.forward_rate(t_curr, t_next)
             
+            # --- LOCAL VOLATILITY CALCULATION ---
+            # sigma(t, S) for each asset and each path
+            sigmas_base = np.zeros((self.num_assets, sim_paths))
+            for a in range(self.num_assets):
+                sigmas_base[a, :] = self.vol_surfaces[a].get_vol(t_curr, s_base[a, :])
+            
             # Draw randoms
             z = rng.standard_normal((self.num_assets, sim_paths))
             
             # Apply correlation
             z = self.cholesky_lb @ z
             
-            # Drift & Diffusion
-            # (r - q - 0.5 * sigma^2) * dt
-            drift = (r - self.div_yields - 0.5 * self.vols**2) * actual_dt
-            diffusion = self.vols[:, np.newaxis] * np.sqrt(actual_dt) * z
+            # Drift & Diffusion (Path-dependent due to LocVol)
+            # We align shapes: sigmas_base is (N_assets, sim_paths)
+            drift_base = (r - self.div_yields[:, np.newaxis] - 0.5 * sigmas_base**2) * actual_dt
+            diffusion_base = sigmas_base * np.sqrt(actual_dt) * z
             
             # Update s_base
-            s_base *= np.exp(drift[:, np.newaxis] + diffusion)
+            s_base *= np.exp(drift_base + diffusion_base)
             
             if antithetic:
+                sigmas_anti = np.zeros((self.num_assets, sim_paths))
+                for a in range(self.num_assets):
+                    sigmas_anti[a, :] = self.vol_surfaces[a].get_vol(t_curr, s_anti[a, :])
+                
+                drift_anti = (r - self.div_yields[:, np.newaxis] - 0.5 * sigmas_anti**2) * actual_dt
+                diffusion_anti = sigmas_anti * np.sqrt(actual_dt) * z # Note: diffusion uses correlated z
+                
                 # Update s_anti with -z
-                s_anti *= np.exp(drift[:, np.newaxis] - diffusion)
+                # Wait, z here is already correlated. 
+                # To be consistent with antithetic variates, 
+                # we should use the same z but with opposite sign before correlation?
+                # Actually, if Z ~ N(0, I), then -Z ~ N(0, I). 
+                # L@(-Z) = -(L@Z). 
+                # So we can just use -diffusion (since diffusion = sigma * sqrt(dt) * L@z)
+                # But sigma depends on s_anti, so we recalculate diffusion_anti with the same L@z
+                
+                s_anti *= np.exp(drift_anti - (sigmas_anti * np.sqrt(actual_dt) * z))
             
             t_curr = t_next
             

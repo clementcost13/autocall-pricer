@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 # Ensure the 'src' directory is in the path for modular imports
 sys.path.append(os.path.join(os.path.dirname(__file__), "src"))
 from cigp_autocall_pricer.engine.zero_coupon import YieldCurve
+from cigp_autocall_pricer.engine.vol_surface import VolatilitySurface
 from cigp_autocall_pricer.engine.monte_carlo import MonteCarloSimulator
 from cigp_autocall_pricer.products.autocall import AutocallAthena
 from cigp_autocall_pricer.engine.market_data import (
@@ -18,7 +19,8 @@ from cigp_autocall_pricer.engine.market_data import (
     get_latest_spot, 
     calculate_return_stats, 
     calculate_rolling_volatility,
-    fetch_yield_curve
+    fetch_yield_curve,
+    fetch_volatility_curve
 )
 
 st.set_page_config(
@@ -120,9 +122,32 @@ st.markdown("""
         border-left: 5px solid #B8860B;
     }
     
+    /* Autofit and Fluid Layout */
+    .stMainBlockContainer {
+        max-width: 100% !important;
+        padding-left: 5rem !important;
+        padding-right: 5rem !important;
+    }
+    
+    /* Ensure Data Editors and Tables fill their slots */
+    div[data-testid="stDataEditor"], div[data-testid="stTable"], .stDataFrame {
+        width: 100% !important;
+    }
+
+    /* Style for buttons to be slightly more premium */
+    .stButton > button {
+        border-radius: 8px;
+        font-weight: 600;
+        transition: all 0.3s ease;
+    }
+    .stButton > button:hover {
+        border-color: #B8860B;
+        color: #B8860B;
+        box-shadow: 0 4px 12px rgba(184, 134, 11, 0.15);
+    }
+    
     /* Hide Streamlit Brand */
     footer {visibility: hidden;}
-    header {visibility: hidden;}
     </style>
 """, unsafe_allow_html=True)
 
@@ -178,6 +203,10 @@ with st.sidebar:
                 empirical_spot = get_latest_spot(h_df)
                 empirical_vol = calculate_historical_volatility(h_df)
                 st.session_state.basket_history[asset_name] = h_df
+                
+                # Pre-fetch Volatility Curve for each asset
+                if f"vol_curve_{asset_name}" not in st.session_state:
+                    st.session_state[f"vol_curve_{asset_name}"] = fetch_volatility_curve(ticker)
             except:
                 empirical_spot, empirical_vol = 100.0, 0.20
             
@@ -185,26 +214,54 @@ with st.sidebar:
             vols_list.append(empirical_vol)
             divs_list.append(0.02) # Default div
 
-    st.subheader("Market Parameters")
-    col_p1, col_p2 = st.columns(2)
-    with col_p1:
-        st.caption(f"**{selected_name1}**")
-        s1 = st.number_input("Spot #1", value=spots_list[0], step=10.0)
-        v1 = st.number_input("Vol #1 (Vol)", value=vols_list[0], step=0.01, format="%.4f")
-        d1 = st.number_input("Div #1", value=divs_list[0], step=0.01, format="%.3f")
+    # --- 1.2 VOLATILITY SURFACE SETTINGS ---
+    st.markdown("### Volatility Surfaces")
     
-    if is_wo:
-        with col_p2:
-            st.caption(f"**{selected_name2}**")
-            s2 = st.number_input("Spot #2", value=spots_list[1], step=10.0)
-            v2 = st.number_input("Vol #2 (Vol)", value=vols_list[1], step=0.01, format="%.4f")
-            d2 = st.number_input("Div #2", value=divs_list[1], step=0.01, format="%.3f")
-        spot_val, vol_val, div_val = [s1, s2], [v1, v2], [d1, d2]
-    else:
-        spot_val, vol_val, div_val = s1, v1, d1 # Fallback for scalar-like usage
-        spots_list, vols_list, divs_list = [s1], [v1], [d1]
+    skew_intensity = st.slider("Skew Intensity (Local Vol)", -2.0, 1.0, -0.2, 0.1, help="Sensitivity of vol to price. Negative means vol increases if spot drops.")
     
-    st.markdown("---")
+    vol_surfaces = []
+    divs_arr = []
+    
+    for i, asset_name in enumerate(selected_assets):
+        with st.expander(f"Market: {asset_name}", expanded=True):
+            s_val = st.number_input(f"Spot: {asset_name}", value=spots_list[i], step=10.0, key=f"spot_in_{asset_name}")
+            d_val = st.number_input(f"Div Yield: {asset_name}", value=0.02, step=0.01, format="%.3f", key=f"div_in_{asset_name}")
+            divs_arr.append(d_val)
+            
+            curve_df = st.session_state.get(f"vol_curve_{asset_name}")
+            if curve_df is not None:
+                edited_vol = st.data_editor(
+                    curve_df,
+                    column_config={
+                        "Tenor": st.column_config.TextColumn("Tenor", disabled=True, width="small"),
+                        "Years": st.column_config.NumberColumn("Yrs", disabled=True, width="small"),
+                        "Rate (%)": st.column_config.NumberColumn("ATM Vol (%)", format="%.2f%%")
+                    },
+                    width="stretch",
+                    hide_index=True,
+                    key=f"vol_editor_{asset_name}"
+                )
+                
+                # Create VolatilitySurface object
+                surf = VolatilitySurface(
+                    tenors=edited_vol["Years"].values,
+                    atm_vols=edited_vol["Rate (%)"].values / 100.0,
+                    skew_intensity=skew_intensity,
+                    s0=s_val
+                )
+                vol_surfaces.append(surf)
+                spots_list[i] = s_val # Update spots_list with user input
+            else:
+                # Fallback: create a flat 20% vol surface if no historical data
+                st.caption("Using default flat vol (20%)")
+                fallback_vol = vols_list[i] if i < len(vols_list) else 0.20
+                surf = VolatilitySurface.from_flat_vol(fallback_vol, skew=skew_intensity, s0=s_val)
+                vol_surfaces.append(surf)
+                spots_list[i] = s_val
+                
+    spots_arr = np.array(spots_list)
+    
+    st.markdown("### Correlation & Dividends")
 
     # --- Yield Curve Logic (Consolidated) ---
     st.subheader("Yield Curve")
@@ -242,9 +299,9 @@ with st.sidebar:
         edited_yc = st.data_editor(
             display_df,
             column_config={
-                "Tenor": st.column_config.TextColumn(disabled=True),
-                "Years": st.column_config.NumberColumn(disabled=True),
-                "Rate (%)": st.column_config.NumberColumn(format="%.3f%%")
+                "Tenor": st.column_config.TextColumn("Tenor", disabled=True, width="small"),
+                "Years": st.column_config.NumberColumn("Yrs", disabled=True, width="small"),
+                "Rate (%)": st.column_config.NumberColumn("Rate (%)", format="%.3f%%")
             },
             width="stretch",
             hide_index=True,
@@ -296,7 +353,7 @@ with st.sidebar:
     # Dynamic MC Paths Generation
     num_paths = 5000 if auto_pricing else 50000
 
-    run_pricer = st.button("Manual Run", use_container_width=True)
+    run_pricer = st.button("Manual Run", use_container_width=True)  # Button API unchanged
 
 # --- TABS ORCHESTRATION ---
 tab_payoff, tab_market, tab_pricing = st.tabs([
@@ -370,7 +427,7 @@ with tab_payoff:
         yaxis=dict(title="Reimbursement (%)", color=SLATE, gridcolor=BORDER, zerolinecolor=BORDER),
         hovermode="x unified"
     )
-    st.plotly_chart(fig_payoff, use_container_width=True)
+    st.plotly_chart(fig_payoff, width="stretch")
 
 # --- TAB 2: MARKET ANALYSIS ---
 with tab_market:
@@ -416,7 +473,7 @@ with tab_market:
                     yaxis=dict(title="Relative Value (Base 100)", color=SLATE, gridcolor=BORDER),
                     margin=dict(l=0, r=0, t=10, b=0), height=400, hovermode="x unified"
                 )
-                st.plotly_chart(fig_rel, use_container_width=True)
+                st.plotly_chart(fig_rel, width="stretch")
         
         # Details tabs for each asset
         for sub_tab, asset_name in zip([sub_idx1, sub_idx2], [selected_name1, selected_name2]):
@@ -429,7 +486,7 @@ with tab_market:
                     
                     fig_h = go.Figure(go.Scatter(x=h_df.index, y=h_df['Close'], mode='lines', line=dict(color=GOLD, width=2)))
                     fig_h.update_layout(title="Spot Price History", paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', height=300, margin=dict(l=0,r=0,t=30,b=0))
-                    st.plotly_chart(fig_h, use_container_width=True)
+                    st.plotly_chart(fig_h, width="stretch")
                     
                     c_dist, c_vol = st.columns(2)
                     with c_dist:
@@ -442,7 +499,7 @@ with tab_market:
                         norm_pdf = stats_sci.norm.pdf(x_range, r_stats['mean_daily'], r_stats['vol_daily'])
                         fig_hist.add_trace(go.Scatter(x=x_range, y=norm_pdf, mode='lines', line=dict(color=CARBON, width=2)))
                         fig_hist.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', height=300, margin=dict(l=0,r=0,t=0,b=0))
-                        st.plotly_chart(fig_hist, use_container_width=True)
+                        st.plotly_chart(fig_hist, width="stretch")
                         st.write(f"Volatility: **{r_stats['vol_daily'] * np.sqrt(252) * 100:.1f}%** | Skew: **{r_stats['skewness']:.2f}**")
                     
                     with c_vol:
@@ -450,7 +507,7 @@ with tab_market:
                         rolling_v = calculate_rolling_volatility(h_df)
                         fig_v = go.Figure(go.Scatter(x=rolling_v.index, y=rolling_v * 100, mode='lines', line=dict(color=GOLD)))
                         fig_v.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', height=300, margin=dict(l=0,r=0,t=0,b=0))
-                        st.plotly_chart(fig_v, use_container_width=True)
+                        st.plotly_chart(fig_v, width="stretch")
     else:
         # SINGLE ASSET MODE
         asset_name = selected_name1
@@ -462,7 +519,7 @@ with tab_market:
             
             fig_h = go.Figure(go.Scatter(x=h_df.index, y=h_df['Close'], mode='lines', line=dict(color=GOLD, width=2)))
             fig_h.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', height=350, margin=dict(l=0,r=0,t=10,b=0))
-            st.plotly_chart(fig_h, use_container_width=True)
+            st.plotly_chart(fig_h, width="stretch")
 
             c_dist, c_vol = st.columns(2)
             with c_dist:
@@ -475,7 +532,7 @@ with tab_market:
                 norm_pdf = stats_sci.norm.pdf(x_range, r_stats['mean_daily'], r_stats['vol_daily'])
                 fig_hist.add_trace(go.Scatter(x=x_range, y=norm_pdf, mode='lines', line=dict(color=CARBON, width=2)))
                 fig_hist.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', height=300)
-                st.plotly_chart(fig_hist, use_container_width=True)
+                st.plotly_chart(fig_hist, width="stretch")
                 st.write(f"Ann. Volatility: **{r_stats['vol_daily'] * np.sqrt(252) * 100:.1f}%** | Skewness: **{r_stats['skewness']:.2f}**")
 
             with c_vol:
@@ -483,7 +540,108 @@ with tab_market:
                 rolling_v = calculate_rolling_volatility(h_df)
                 fig_v = go.Figure(go.Scatter(x=rolling_v.index, y=rolling_v * 100, mode='lines', line=dict(color=GOLD)))
                 fig_v.update_layout(paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', height=300)
-                st.plotly_chart(fig_v, use_container_width=True)
+                st.plotly_chart(fig_v, width="stretch")
+
+    # --- LOCAL VOLATILITY SURFACE VISUALIZATION ---
+    if vol_surfaces:
+        st.markdown("---")
+        st.header("Local Volatility Surface")
+        
+        # Select which asset's surface to display
+        surf_asset_idx = 0
+        if is_wo and len(vol_surfaces) > 1:
+            surf_asset_name = st.selectbox("Surface for", selected_assets, key="vol_surf_select")
+            surf_asset_idx = selected_assets.index(surf_asset_name)
+        
+        surf = vol_surfaces[surf_asset_idx]
+        s0 = surf.s0
+        
+        # Build the grid
+        t_grid = np.linspace(0.05, maturity, 40)
+        moneyness_grid = np.linspace(0.50, 1.50, 50)  # 50% to 150% of spot
+        spot_grid = moneyness_grid * s0
+        
+        # Compute surface: vol_matrix[i, j] = sigma(t_i, S_j)
+        vol_matrix = np.zeros((len(t_grid), len(spot_grid)))
+        for i, t in enumerate(t_grid):
+            vol_matrix[i, :] = surf.get_vol(t, spot_grid) * 100.0  # Convert to %
+
+        col_3d, col_heatmap = st.columns(2)
+        
+        with col_3d:
+            st.markdown("#### 3D Surface")
+            fig_surf = go.Figure(data=[go.Surface(
+                x=moneyness_grid * 100,  # Moneyness %
+                y=t_grid,
+                z=vol_matrix,
+                colorscale=[
+                    [0.0, "#1a1a2e"],
+                    [0.25, "#16213e"],
+                    [0.5, "#0f3460"],
+                    [0.75, "#e94560"],
+                    [1.0, "#B8860B"]
+                ],
+                showscale=True,
+                hovertemplate="Moneyness: %{x:.0f}%<br>Time: %{y:.1f}Y<br>Vol: %{z:.1f}%<extra></extra>"
+            )])
+            fig_surf.update_layout(
+                scene=dict(
+                    xaxis=dict(title="Moneyness (%)", color=SLATE),
+                    yaxis=dict(title="Time (Years)", color=SLATE),
+                    zaxis=dict(title="Local Vol (%)", color=SLATE),
+                    bgcolor='rgba(0,0,0,0)'
+                ),
+                paper_bgcolor='rgba(0,0,0,0)',
+                margin=dict(l=0, r=0, t=10, b=0),
+                height=450
+            )
+            st.plotly_chart(fig_surf, width="stretch")
+        
+        with col_heatmap:
+            st.markdown("#### Heatmap (Time x Moneyness)")
+            fig_hm = go.Figure(data=go.Heatmap(
+                x=moneyness_grid * 100,
+                y=t_grid,
+                z=vol_matrix,
+                colorscale=[
+                    [0.0, "#1a1a2e"],
+                    [0.25, "#16213e"],
+                    [0.5, "#0f3460"],
+                    [0.75, "#e94560"],
+                    [1.0, "#B8860B"]
+                ],
+                colorbar=dict(title="Vol (%)"),
+                hovertemplate="Moneyness: %{x:.0f}%<br>Time: %{y:.1f}Y<br>Vol: %{z:.1f}%<extra></extra>"
+            ))
+            # Add vertical line at ATM (100%)
+            fig_hm.add_vline(x=100, line_dash="dash", line_color="white", opacity=0.6,
+                             annotation_text="ATM", annotation_font_color="white", annotation_position="top")
+            fig_hm.update_layout(
+                xaxis=dict(title="Moneyness (%)", color=SLATE),
+                yaxis=dict(title="Time (Years)", color=SLATE),
+                paper_bgcolor='rgba(0,0,0,0)',
+                plot_bgcolor='rgba(0,0,0,0)',
+                margin=dict(l=0, r=0, t=10, b=0),
+                height=450
+            )
+            st.plotly_chart(fig_hm, width="stretch")
+        
+        # ATM Term Structure line chart
+        st.markdown("#### ATM Volatility Term Structure")
+        atm_vols_ts = [surf.get_vol(t, np.array([s0]))[0] * 100.0 for t in t_grid]
+        fig_ts = go.Figure(go.Scatter(
+            x=t_grid, y=atm_vols_ts, mode='lines+markers',
+            line=dict(color=GOLD, width=3),
+            marker=dict(size=4, color=GOLD),
+            hovertemplate="T=%{x:.1f}Y  Vol=%{y:.1f}%<extra></extra>"
+        ))
+        fig_ts.update_layout(
+            xaxis=dict(title="Time (Years)", color=SLATE, gridcolor=BORDER),
+            yaxis=dict(title="ATM Vol (%)", color=SLATE, gridcolor=BORDER),
+            paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)',
+            margin=dict(l=0, r=0, t=10, b=0), height=300
+        )
+        st.plotly_chart(fig_ts, width="stretch")
 
 # --- TAB 3: MASTER PRICING CONSOLE ---
 with tab_pricing:
@@ -498,33 +656,34 @@ with tab_pricing:
             
         @st.cache_data(show_spinner=False)
         def execute_pricing_engine(
-            spots_list, vols_list, divs_list, rho, zc_tenors, zc_rates,
+            _spots_list, _vol_surfaces, _divs_list, _rho, _zc_tenors, _zc_rates,
             obs_times, autocall_level_val, coupon_barrier_val, coupon_pa,
             steps_per_year, pdi_barrier, memory_feature,
-            maturity, auto_pricing, run_pricer_flag, shift_years=0.0
+            maturity, auto_pricing, run_pricer_flag, shift_years=0.0,
+            market_hash=None
         ):
             # Internal re-instantiation of objects to avoid cache serialization issues
-            spots_arr = np.array(spots_list)
-            vols_arr = np.array(vols_list)
-            divs_arr = np.array(divs_list)
+            spots_arr = np.array(_spots_list)
+            vol_surfaces = _vol_surfaces
+            divs_arr = np.array(_divs_list)
             num_assets = len(spots_arr)
             
             if num_assets == 1:
                 corr_matrix = np.array([[1.0]])
             else:
                 # Ensure rho is not exactly 1 or -1 to avoid singular matrix
-                safe_rho = np.clip(rho, -0.9999, 0.9999)
+                safe_rho = np.clip(_rho, -0.9999, 0.9999)
                 corr_matrix = np.array([[1.0, safe_rho], [safe_rho, 1.0]])
             
-            yield_curve = YieldCurve(times=zc_tenors, rates=zc_rates)
-            mc = MonteCarloSimulator(spots_arr, vols_arr, corr_matrix, yield_curve, divs_arr)
+            yield_curve = YieldCurve(times=np.array(_zc_tenors), rates=np.array(_zc_rates))
+            mc = MonteCarloSimulator(spots_arr, vol_surfaces, corr_matrix, yield_curve, divs_arr)
             autocall_levels = np.ones(len(obs_times)) * autocall_level_val
             c_barriers = np.ones(len(obs_times)) * coupon_barrier_val
             c_rates = np.ones(len(obs_times)) * ((coupon_pa * 100.0) / steps_per_year)
             
             # For Option 2 (Forward Start), the product striks at Issue level (100%).
             # Simulation is relative to issue, but discounting is from Today (Absolute Time).
-            pricing_obs_times = obs_times + shift_years
+            pricing_obs_times = np.array(obs_times) + shift_years
             
             product = AutocallAthena(
                 obs_times=pricing_obs_times, 
@@ -537,16 +696,16 @@ with tab_pricing:
             )
             
             # --- DYNAMIC MC CONTROL VARIATE LOOP ---
-            epsilon = 0.02 # 0.02% (2 bps) relative to spot
+            epsilon = 0.05 # Increased tolerance for LocVol complexity
             batch_size = 5000
             max_paths = 10000 if auto_pricing else 100000 
             
-            # Average Spot of the FIRST asset for CV
+            # Control Variate Target (European Put at PDI barrier) for Asset #1
             spot_cv = spots_arr[0]
-            vol_cv = vols_arr[0]
+            # Use ATM vol at maturity as a proxy for CV
+            vol_cv = vol_surfaces[0].get_vol(maturity, np.array([spot_cv]))[0]
             div_cv = divs_arr[0]
             
-            # Control Variate Target (European Put at PDI barrier)
             T_mat = maturity
             K_strike = spot_cv * pdi_barrier
             r_rate = yield_curve.forward_rate(0, T_mat)
@@ -567,16 +726,19 @@ with tab_pricing:
                 current_paths = np.concatenate(all_paths, axis=0)
                 S_T_0 = current_paths[:, 0, -1]
                 
+                # Use current spot for CV if needed
                 put_payoffs = np.maximum(K_strike - S_T_0, 0)
                 mc_put_price = np.mean(put_payoffs) * yield_curve.discount_factor(T_mat)
                 
                 err_abs = abs(mc_put_price - target_bs_put)
                 err_pct = (err_abs / spot_cv) * 100.0
                 
-                status_placeholder.info(f"Adapting Model... Paths: {total_paths:,.0f} | Target Put Pricing Err vs BS: {err_pct:.4f}% (Target: <0.02%)")
+                if not auto_pricing:
+                    status_placeholder.info(f"Adapting Model... Paths: {total_paths:,.0f} | Target Put Pricing Err vs BS: {err_pct:.4f}% (Target: <0.05%)")
                 
                 if total_paths >= 10000 and err_pct <= epsilon:
-                    status_placeholder.success(f"Model Converged! Paths used: {total_paths:,.0f} | Final Control Error: {err_pct:.4f}%")
+                    if not auto_pricing:
+                        status_placeholder.success(f"Model Converged! Paths used: {total_paths:,.0f} | Final Control Error: {err_pct:.4f}%")
                     break
                     
             if total_paths >= max_paths and not auto_pricing:
@@ -587,18 +749,29 @@ with tab_pricing:
             paths = np.concatenate(all_paths, axis=0)
             results = product.price(paths, spots_arr, yield_curve)
             
-            # Greeks are disabled for now as per user request
+            # Greeks calculation (if needed, but kept as None for performance in this turns)
             greeks = None
                 
             return results, greeks, paths
             
         with st.spinner("Executing Master Pricing Engine..."):
+            # Create a combined hash of all complex market inputs to force cache invalidation
+            market_hash = hash((
+                tuple(spots_list), 
+                tuple(vol_surfaces), 
+                tuple(divs_arr), 
+                rho_val if is_wo else 1.0,
+                tuple(zc_tenors), 
+                tuple(zc_rates)
+            ))
+            
             results, greeks, paths = execute_pricing_engine(
-                spots_list, vols_list, divs_list, rho_val if is_wo else 1.0, 
-                zc_tenors, zc_rates,
-                obs_times, autocall_level_val, coupon_barrier_val, coupon_pa,
+                tuple(spots_list), tuple(vol_surfaces), tuple(divs_arr), rho_val if is_wo else 1.0, 
+                tuple(zc_tenors), tuple(zc_rates),
+                tuple(obs_times), autocall_level_val, coupon_barrier_val, coupon_pa,
                 steps_per_year, pdi_barrier, memory_feature,
-                maturity, auto_pricing, run_pricer, shift_years=shift_years
+                maturity, auto_pricing, run_pricer, shift_years=shift_years,
+                market_hash=market_hash
             )
             
             # Re-instantiate locally strictly for downstream UI calculation use
@@ -647,7 +820,7 @@ with tab_pricing:
                     margin=dict(l=0, r=0, t=10, b=0), height=350,
                     showlegend=False
                 )
-                st.plotly_chart(fig_wf, use_container_width=True)
+                st.plotly_chart(fig_wf, width="stretch")
                 
             with col_desc:
                 st.markdown("#### Breakdown Insights")
@@ -676,7 +849,7 @@ with tab_pricing:
                     yaxis=dict(title="Probability (%)", color=CARBON, gridcolor=BORDER),
                     margin=dict(l=0, r=0, t=10, b=0), height=350
                 )
-                st.plotly_chart(fig_exit, use_container_width=True)
+                st.plotly_chart(fig_exit, width="stretch")
  
             with t_audit:
                 st.markdown("#### Scenario Profitability Audit")
@@ -712,12 +885,22 @@ with tab_pricing:
                 # Sum verification row
                 audit_data.append({
                     "Event": "**TOTAL**", 
-                    "Exit Prob": "**100.0%**", 
+                    "Exit Prob": "100.0%", 
                     "Expected Payoff": "-", 
-                    "PV Contribution": f"**{fv:.2f}%**"
+                    "PV Contribution": f"{fv:.2f}%"
                 })
                 
-                st.table(pd.DataFrame(audit_data))
+                st.dataframe(
+                    pd.DataFrame(audit_data),
+                    column_config={
+                        "Event": st.column_config.TextColumn("Scenario Event", width="large"),
+                        "Exit Prob": st.column_config.TextColumn("Prob %", width="small"),
+                        "Expected Payoff": st.column_config.TextColumn("Payoff", width="medium"),
+                        "PV Contribution": st.column_config.TextColumn("PV Contrib", width="medium")
+                    },
+                    width="stretch",
+                    hide_index=True
+                )
                 
                 st.markdown("#### Path Inspector")
                 col_ins1, col_ins2 = st.columns([1, 2])
@@ -821,4 +1004,4 @@ with tab_pricing:
                         showlegend=False,
                         hovermode="x unified"
                     )
-                    st.plotly_chart(fig_path, use_container_width=True)
+                    st.plotly_chart(fig_path, width="stretch")

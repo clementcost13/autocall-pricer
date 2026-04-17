@@ -77,5 +77,37 @@ def fetch_yield_curve(currency: str):
         "Rate (%)": rates
     })
 
+def fetch_volatility_curve(ticker: str):
+    """
+    Simulates a Volatility Term Structure (ATM) by calculating
+    historical rolling volatilities over different windows.
+    Returns 6M, 1Y, 2Y, 3Y, 5Y, 10Y historical vols.
+    """
+    # Fetch 10 years to have enough data for all windows
+    df = fetch_historical_data(ticker, period="10y")
+    if 'Log_Return' not in df.columns:
+        df['Log_Return'] = np.log(df['Close'] / df['Close'].shift(1))
+    
+    returns = df['Log_Return'].dropna()
+    
+    tenors = ["6M", "1Y", "2Y", "3Y", "5Y", "10Y"]
+    years = [0.5, 1.0, 2.0, 3.0, 5.0, 10.0]
+    windows = [126, 252, 504, 756, 1260, 2520]  # Approx trading days
+    
+    vols = []
+    for w in windows:
+        if len(returns) >= w:
+            v_ann = returns.tail(w).std() * np.sqrt(252)
+        else:
+            v_ann = returns.std() * np.sqrt(252)
+        vols.append(float(v_ann * 100.0))  # Store as percentage for UI
+        
+    return pd.DataFrame({
+        "Tenor": tenors,
+        "Years": years,
+        "Rate (%)": vols
+    })
+
+
 def get_latest_spot(df: pd.DataFrame, column: str = "Close") -> float:
     return float(df[column].iloc[-1])

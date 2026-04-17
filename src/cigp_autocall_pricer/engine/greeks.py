@@ -6,12 +6,12 @@ class GreeksCalculator:
     Calculates numerical Greeks for an Autocall product using finite differences
     and Common Random Numbers (CRN) for maximum stability.
     """
-    def __init__(self, simulator_class, product, yield_curve, spots, vols, corr_matrix, divs):
+    def __init__(self, simulator_class, product, yield_curve, spots, vol_surfaces, corr_matrix, divs):
         self.simulator_class = simulator_class
         self.product = product
         self.yield_curve = yield_curve
         self.spots = np.array(spots, dtype=float)
-        self.vols = np.array(vols, dtype=float)
+        self.vol_surfaces = vol_surfaces # List of VolatilitySurface
         self.corr_matrix = np.array(corr_matrix, dtype=float)
         self.divs = np.array(divs, dtype=float)
 
@@ -19,27 +19,41 @@ class GreeksCalculator:
         """
         Compute Delta, Gamma, Vega, Theta, Rho using FD + CRN.
         """
-        base_price = self._price_at(self.spots, self.vols, self.yield_curve, obs_times, num_paths, seed)
+        base_price = self._price_at(self.spots, self.vol_surfaces, self.yield_curve, obs_times, num_paths, seed)
         
         # --- DELTA & GAMMA (Shock Spot by +/- 1%) ---
         ds = 0.01 * self.spots
-        p_plus = self._price_at(self.spots + ds, self.vols, self.yield_curve, obs_times, num_paths, seed)
-        p_minus = self._price_at(self.spots - ds, self.vols, self.yield_curve, obs_times, num_paths, seed)
+        p_plus = self._price_at(self.spots + ds, self.vol_surfaces, self.yield_curve, obs_times, num_paths, seed)
+        p_minus = self._price_at(self.spots - ds, self.vol_surfaces, self.yield_curve, obs_times, num_paths, seed)
         
         delta = (p_plus - p_minus) / (2 * ds)
         gamma = (p_plus - 2 * base_price + p_minus) / (ds**2)
         
-        # --- VEGA (Shock Vol by +1% absolute) ---
+        # --- VEGA (Shock ATM Vol Curve by +1% absolute) ---
         dv = 0.01
-        p_vol_plus = self._price_at(self.spots, self.vols + dv, self.yield_curve, obs_times, num_paths, seed)
-        p_vol_minus = self._price_at(self.spots, self.vols - dv, self.yield_curve, obs_times, num_paths, seed)
+        
+        v_plus = []
+        v_minus = []
+        for v in self.vol_surfaces:
+            v_p = deepcopy(v)
+            v_m = deepcopy(v)
+            v_p.atm_vols += dv
+            v_m.atm_vols -= dv
+            v_p._update_interpolation() # Ensure interpolation is refreshed
+            v_m._update_interpolation()
+            v_plus.append(v_p)
+            v_minus.append(v_m)
+            
+        p_vol_plus = self._price_at(self.spots, v_plus, self.yield_curve, obs_times, num_paths, seed)
+        p_vol_minus = self._price_at(self.spots, v_minus, self.yield_curve, obs_times, num_paths, seed)
         vega = (p_vol_plus - p_vol_minus) / (2 * dv)
         
         # --- RHO (Shock Rates by +10 bps) ---
         dr = 0.001 
         shifted_yc = deepcopy(self.yield_curve)
         shifted_yc.rates += dr
-        p_rho = self._price_at(self.spots, self.vols, shifted_yc, obs_times, num_paths, seed)
+        shifted_yc._update_interpolation()
+        p_rho = self._price_at(self.spots, self.vol_surfaces, shifted_yc, obs_times, num_paths, seed)
         rho = (p_rho - base_price) / dr
         
         # --- THETA (Shock Time by 1 day) ---
@@ -47,7 +61,7 @@ class GreeksCalculator:
         # Only shock if time remains
         if obs_times[0] > dt:
             shifted_times = obs_times - dt
-            p_theta = self._price_at(self.spots, self.vols, self.yield_curve, shifted_times, num_paths, seed)
+            p_theta = self._price_at(self.spots, self.vol_surfaces, self.yield_curve, shifted_times, num_paths, seed)
             theta = (p_theta - base_price) / (dt * 365.0) # Daily Theta
         else:
             theta = 0.0
@@ -83,8 +97,8 @@ class GreeksCalculator:
             
         return profiles
 
-    def _price_at(self, s, v, yc, times, n, seed):
-        sim = self.simulator_class(s, v, self.corr_matrix, yc, self.divs)
+    def _price_at(self, s, v_surfaces, yc, times, n, seed):
+        sim = self.simulator_class(s, v_surfaces, self.corr_matrix, yc, self.divs)
         paths = sim.generate_paths(times, num_paths=n, seed=seed)
         res = self.product.price(paths, s, yc)
         return res['fair_value']
