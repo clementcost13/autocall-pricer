@@ -1,0 +1,18 @@
+[project]
+name = "cigp-autocall-pricer"
+version = "0.1.0"
+description = "Autocall Athena pricer – ZC bootstrapping, path-dependent digitals, PDI, worst-of & decrement indices. Streamlit front-end."
+requires-python = ">=3.14"
+dependencies = [
+    "matplotlib>=3.10.8",
+    "openpyxl>=3.1.5",
+    "plotly>=6.7.0",
+    "scipy>=1.17.1",
+    "streamlit>=1.56.0",
+    "xlrd>=2.0.2",
+    "yfinance>=0.2.37",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
