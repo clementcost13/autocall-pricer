@@ -1,4 +1,4 @@
-# CIGP Autocall Pricer
+# Autocall Pricer
 
 This project contains a comprehensive Autocall Athena pricer, exploring zero-coupon (ZC) bootstrapping, path-dependent digitals, put down-and-in (PDI), worst-of features, and decrement indices, complete with a Streamlit front-end.
 
@@ -24,7 +24,7 @@ Clone the project repository to your local machine:
 
 ```bash
 git clone <your-repo-url>
-cd cigp-autocall-pricer
+cd autocall-pricer
 ```
 
 ### 3. Sync the Environment
@@ -53,5 +53,5 @@ To update the app, simply push your changes to the `main` branch of your GitHub 
 
 ---
 
-*Project maintained by CIGP HK Quantitative Team.*
+*Project maintained by Quantitative Team.*
 

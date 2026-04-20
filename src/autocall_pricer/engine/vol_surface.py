@@ -21,8 +21,8 @@ class VolatilitySurface:
         self._update_interpolation()
 
     def _update_interpolation(self):
-        # Linear interpolation on ATM rates
-        self.vts_func = interp1d(self.tenors, self.atm_vols, kind='linear', fill_value="extrapolate")
+        # Flat extrapolation outside bounds avoids crazy negative/huge vols at t=0
+        self.vts_func = interp1d(self.tenors, self.atm_vols, kind='linear', fill_value=(self.atm_vols[0], self.atm_vols[-1]), bounds_error=False)
 
     def __hash__(self):
         return hash((tuple(self.tenors), tuple(self.atm_vols), self.skew_intensity, self.s0))

@@ -106,18 +106,10 @@ class MonteCarloSimulator:
                     sigmas_anti[a, :] = self.vol_surfaces[a].get_vol(t_curr, s_anti[a, :])
                 
                 drift_anti = (r - self.div_yields[:, np.newaxis] - 0.5 * sigmas_anti**2) * actual_dt
-                diffusion_anti = sigmas_anti * np.sqrt(actual_dt) * z # Note: diffusion uses correlated z
+                diffusion_anti = sigmas_anti * np.sqrt(actual_dt) * z # z is already correlated
                 
-                # Update s_anti with -z
-                # Wait, z here is already correlated. 
-                # To be consistent with antithetic variates, 
-                # we should use the same z but with opposite sign before correlation?
-                # Actually, if Z ~ N(0, I), then -Z ~ N(0, I). 
-                # L@(-Z) = -(L@Z). 
-                # So we can just use -diffusion (since diffusion = sigma * sqrt(dt) * L@z)
-                # But sigma depends on s_anti, so we recalculate diffusion_anti with the same L@z
-                
-                s_anti *= np.exp(drift_anti - (sigmas_anti * np.sqrt(actual_dt) * z))
+                # Update s_anti with -z (since Z ~ N(0,1), its antithesis is -Z, thus diffusion is negative relative to the base drift)
+                s_anti *= np.exp(drift_anti - diffusion_anti)
             
             t_curr = t_next
             

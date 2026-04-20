@@ -9,11 +9,11 @@ from datetime import datetime, timedelta
 
 # Ensure the 'src' directory is in the path for modular imports
 sys.path.append(os.path.join(os.path.dirname(__file__), "src"))
-from cigp_autocall_pricer.engine.zero_coupon import YieldCurve
-from cigp_autocall_pricer.engine.vol_surface import VolatilitySurface
-from cigp_autocall_pricer.engine.monte_carlo import MonteCarloSimulator
-from cigp_autocall_pricer.products.autocall import AutocallAthena
-from cigp_autocall_pricer.engine.market_data import (
+from autocall_pricer.engine.zero_coupon import YieldCurve
+from autocall_pricer.engine.vol_surface import VolatilitySurface
+from autocall_pricer.engine.monte_carlo import MonteCarloSimulator
+from autocall_pricer.products.autocall import AutocallAthena
+from autocall_pricer.engine.market_data import (
     fetch_historical_data, 
     calculate_historical_volatility, 
     get_latest_spot, 
@@ -24,7 +24,7 @@ from cigp_autocall_pricer.engine.market_data import (
 )
 
 st.set_page_config(
-    page_title="CIGP Autocall Pricer",
+    page_title="Autocall Pricer",
     layout="wide",
 )
 
@@ -41,92 +41,82 @@ st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;800&family=Inter:wght@400;600&family=Roboto+Mono:wght@500;700&display=swap');
     
+    /* --- HIDE DEFAULT STREAMLIT ARTIFACTS --- */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden !important;}
+    .stDeployButton {display: none;}
+    
+    /* --- GLOBAL LAYOUT --- */
     html, body, [class*="css"]  {
         font-family: 'Inter', sans-serif;
     }
     
-    .stApp { 
-        background-color: #F8F9FA; 
-        color: #1E2329; 
+    /* Add sufficient top padding so the Streamlit header doesn't overlap content */
+    .block-container {
+        padding-top: 4rem !important; 
+        padding-bottom: 2rem !important;
+        max-width: 100% !important;
+        padding-left: 3rem !important;
+        padding-right: 3rem !important;
     }
     
     h1, h2, h3 { 
         font-family: 'Outfit', sans-serif;
         font-weight: 800; 
-        color: #1E2329 !important; 
         border-bottom: none; 
-        letter-spacing: -0.8px; 
+        letter-spacing: -0.5px; 
     }
     
-    /* Metrics Styling - Clean Card */
+    /* --- METRICS / WIDGETS --- */
     div[data-testid="metric-container"] {
-        background: #FFFFFF;
-        padding: 1.5rem;
-        border-radius: 12px;
-        border: 1px solid #EAECEF;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+        border-radius: 8px;
+        border: 1px solid var(--secondary-background-color);
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+        transition: transform 0.2s, box-shadow 0.2s;
+        padding: 1rem;
+        background-color: transparent;
     }
     div[data-testid="metric-container"]:hover {
+        transform: translateY(-2px);
         border-color: #B8860B;
-        box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+        box-shadow: 0 4px 12px rgba(184, 134, 11, 0.1);
     }
     div[data-testid="stMetricValue"] {
         color: #B8860B !important; 
         font-family: 'Roboto Mono', monospace;
         font-weight: 700;
-        font-size: 2.2rem !important;
+        font-size: 2rem !important;
     }
     div[data-testid="stMetricLabel"] {
-        color: #707A8A !important;
         font-family: 'Outfit', sans-serif;
         font-weight: 600;
         text-transform: uppercase;
-        letter-spacing: 1.2px;
-        font-size: 0.85rem !important;
+        font-size: 0.8rem !important;
     }
     
-    /* Sidebar Styling */
-    section[data-testid="stSidebar"] {
-        background-color: #FFFFFF;
-        border-right: 1px solid #EAECEF;
-    }
-    
-    /* Input Elements */
-    .stNumberInput input, .stSelectbox [data-baseweb="select"] {
-        background-color: #F8F9FA !important;
-        border: 1px solid #EAECEF !important;
-    }
-    
-    /* Tabs Styling */
+    /* Modern Tabs */
     .stTabs [data-baseweb="tab-list"] {
-        gap: 2.5rem;
-        border-bottom: 2px solid #EAECEF;
+        gap: 2rem;
+        border-bottom: 2px solid var(--secondary-background-color);
+        padding-bottom: 0px;
     }
     .stTabs [data-baseweb="tab"] {
         height: 50px;
         background-color: transparent;
         font-family: 'Outfit', sans-serif;
         font-weight: 600;
-        color: #707A8A;
         font-size: 1rem;
+        padding: 0 1rem;
     }
     .stTabs [aria-selected="true"] {
-        color: #1E2329 !important;
         border-bottom: 3px solid #B8860B !important;
     }
     
-    /* Success/Error/Info customization */
+    /* Alerts */
     div.stAlert {
-        background-color: #FFFFFF;
-        border: 1px solid #EAECEF;
-        border-left: 5px solid #B8860B;
-    }
-    
-    /* Autofit and Fluid Layout */
-    .stMainBlockContainer {
-        max-width: 100% !important;
-        padding-left: 5rem !important;
-        padding-right: 5rem !important;
+        border: 1px solid var(--secondary-background-color);
+        border-left: 4px solid #B8860B;
+        border-radius: 4px;
     }
     
     /* Ensure Data Editors and Tables fill their slots */
@@ -134,20 +124,18 @@ st.markdown("""
         width: 100% !important;
     }
 
-    /* Style for buttons to be slightly more premium */
+    /* Buttons */
     .stButton > button {
-        border-radius: 8px;
+        border-radius: 6px;
         font-weight: 600;
-        transition: all 0.3s ease;
+        font-family: 'Outfit', sans-serif;
+        letter-spacing: 0.5px;
+        transition: all 0.2s ease;
     }
     .stButton > button:hover {
         border-color: #B8860B;
         color: #B8860B;
-        box-shadow: 0 4px 12px rgba(184, 134, 11, 0.15);
     }
-    
-    /* Hide Streamlit Brand */
-    footer {visibility: hidden;}
     </style>
 """, unsafe_allow_html=True)
 
@@ -158,7 +146,12 @@ def load_csv_data(mtime):
     df = pd.read_csv(csv_path)
     return df
 
-st.title("Athena Autocall Pricer")
+st.markdown("""
+<div style="background-color: var(--secondary-background-color); padding: 1.2rem 2rem; border-radius: 8px; margin-bottom: 2rem; display: flex; justify-content: space-between; align-items: center; border: 1px solid var(--primary-color); border-left: 5px solid #B8860B; box-shadow: 0 2px 4px rgba(0,0,0,0.05);">
+    <h1 style="color: #B8860B; margin: 0; font-family: 'Outfit', sans-serif; font-size: 1.6rem; letter-spacing: -0.5px;">Institutional <span style="font-weight: 400; font-size: 1.4rem;">| Autocall Pricer</span></h1>
+    <span style="font-family: 'Roboto Mono', monospace; font-size: 0.85rem; padding: 4px 10px; border-radius: 4px; border: 1px solid var(--primary-color);">SYSTEM v2.0</span>
+</div>
+""", unsafe_allow_html=True)
 
 csv_p = os.path.join(os.path.dirname(__file__), "data", "market_data.csv")
 df_indices = load_csv_data(os.path.getmtime(csv_p))
@@ -647,7 +640,8 @@ with tab_market:
 with tab_pricing:
     if run_pricer or auto_pricing:
         
-        # Standard BS Put formula for Control Variate
+        # BLACK-SCHOLES (Used strictly as a Control Variate / Calibration benchmark)
+        # The actual Autocall pricing uses Monte Carlo with Local Volatility diffusion.
         def bs_put_price(S, K, T, r, q, vol):
             if T <= 0: return max(K - S, 0.0)
             d1 = (np.log(S/K) + (r - q + 0.5 * vol**2)*T) / (vol * np.sqrt(T))
@@ -740,6 +734,15 @@ with tab_pricing:
                     if not auto_pricing:
                         status_placeholder.success(f"Model Converged! Paths used: {total_paths:,.0f} | Final Control Error: {err_pct:.4f}%")
                     break
+                
+                # SKEW SAFETY BYPASS:
+                # Black-Scholes uses ATM Vol. Local Vol uses Skewed Vol. 
+                # A Skewed Put will fundamentally have a different fair value than an ATM BS Put.
+                # If skew is activated, we accept 10k paths minimum convergence to avoid forcing an impossible mathematical target.
+                if vol_surfaces[0].skew_intensity != 0.0 and total_paths >= 10000:
+                    if not auto_pricing:
+                        status_placeholder.info(f"Skew Active. Executing {total_paths:,.0f} paths. Control Var metric bypassed.")
+                    break
                     
             if total_paths >= max_paths and not auto_pricing:
                 status_placeholder.warning(f"Max capacity reached ({total_paths:,.0f} paths). Final Control Error: {err_pct:.4f}%")
@@ -782,7 +785,7 @@ with tab_pricing:
             c1, c2, c3 = st.columns([2, 1, 1])
             fv = results['fair_value']
             c1.metric("Fair Value", f"{fv:.2f}%", delta=f"{fv-100:.2f}%")
-            c2.metric("PDI Probability", f"{results['prob_pdi']*100:.1f}%")
+            c2.metric("PDI Prob.", f"{results['prob_pdi']*100:.1f}%")
             # Expected life in years
             e_life = results.get('expected_maturity', maturity)
             c3.metric("Expected Life", f"{e_life:.2f} Y")
@@ -800,7 +803,7 @@ with tab_pricing:
                 # Bases for the bars
                 bases = [0, bond_val, bond_val + coupon_val, 0]
                 values = [bond_val, coupon_val, pdi_val, fv]
-                labels = ["Bond", "Coupons", "PDI Risk", "Fair Value"]
+                labels = ["Bond", "Coupons", "PDI Exposure", "Fair Value"]
                 colors = ["#3182CE", "#38A169", "#E53E3E", GOLD]
 
                 fig_wf = go.Figure(go.Bar(
@@ -827,7 +830,7 @@ with tab_pricing:
                 st.write(f"Structural value: **{fv:.2f}%**")
                 st.info(f"**Bond Component**: {bd['Pure Bond Part']:.2f}%")
                 st.success(f"**Optionality**: +{bd['Coupons Part']:.2f}%")
-                st.error(f"**PDI Penalty**: {bd['PDI Risk (Put)']:.2f}%")
+                st.error(f"**PDI Structural Risk**: {bd['PDI Risk (Put)']:.2f}%")
             
             st.markdown("---")
             t_structure, t_audit = st.tabs(["Structural Probability", "Replication Audit"])
@@ -913,11 +916,17 @@ with tab_pricing:
                         path_idx = 0
                         p_info = {"total_pv": 0, "event": "N/A", "category": "N/A", "exit_time": maturity}
                     else:
-                        # Friendly dropdown formatting
+                        # Friendly dropdown formatting with mapped UI names to preserve internal logic links
+                        ui_scenario_names = {
+                            "Autocall_1Y": "Early Exit (Autocall)",
+                            "Autocall_Mat": "Maturity Exit (Max Return)",
+                            "Protected": "Capital Protected",
+                            "PDI": "PDI Exposure"
+                        }
                         path_idx = st.selectbox(
                             "Select a Market Scenario", 
                             options=path_options, 
-                            format_func=lambda x: f"Scenario: {audit_dict[x]['category']} - {audit_dict[x]['event']}"
+                            format_func=lambda x: f"{ui_scenario_names.get(audit_dict[x]['category'], audit_dict[x]['category'])} | {audit_dict[x]['event']}"
                         )
                         p_info = audit_dict[path_idx]
                         
@@ -933,7 +942,7 @@ with tab_pricing:
                     elif p_info.get("category") == "Protected":
                         st.info("**Mechanism:** The product survived until maturity without ever triggering an early autocall. However, because the final performance stayed above the PDI Barrier, your capital was 100% protected.")
                     elif p_info.get("category") == "PDI":
-                        st.error("**Mechanism:** The asset crashed below the PDI Barrier at maturity. The capital protection was lost, resulting in a direct corresponding loss on the nominal invested.")
+                        st.error("**Mechanism:** The asset performance breached the PDI Barrier at maturity. The structural protection was consumed, resulting in a direct adjustment on the nominal.")
                     
                 with col_ins2:
                     # Build base time axes

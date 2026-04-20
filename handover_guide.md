@@ -13,7 +13,7 @@ Ouvrez un terminal dans ce dossier et tapez les commandes suivantes :
     ```
 
 2.  **Lier à votre GitHub** :
-    *   Créez un dépôt sur [github.com/new](https://github.com/new) nommé `cigp-autocall-pricer`.
+    *   Créez un dépôt sur [github.com/new](https://github.com/new) nommé `autocall-pricer`.
     *   **NE cochez PAS** "Initialize with README".
     *   Copiez l'URL de votre dépôt et tapez :
     ```powershell
@@ -34,7 +34,7 @@ Ouvrez un terminal dans ce dossier et tapez les commandes suivantes :
 ## 💡 Notes importantes
 - **Redémarrage** : Si la commande `git` n'est pas reconnue immédiatement dans votre terminal actuel, fermez-le et rouvrez-en un nouveau (ou redémarrez votre éditeur).
 - **Sécurité** : J'ai ajouté un fichier `.gitignore` pour éviter d'envoyer les fichiers inutiles (comme l'archive ZIP ou l'environnement virtuel).
-- **Plan B** : Votre fichier **`cigp_backup.zip`** est toujours là au cas où.
+- **Plan B** : Votre fichier **`project_backup.zip`** est toujours là au cas où.
 
 ---
 *Vous avez maintenant le plein contrôle technique sur votre projet !*

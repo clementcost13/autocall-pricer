@@ -1,5 +1,5 @@
 [project]
-name = "cigp-autocall-pricer"
+name = "autocall-pricer"
 version = "0.1.0"
 description = "Autocall Athena pricer – ZC bootstrapping, path-dependent digitals, PDI, worst-of & decrement indices. Streamlit front-end."
 requires-python = ">=3.14"
